@@ -102,7 +102,7 @@ INVALID = [
     "jal x1, 1", "lui x1, 0x100000", "lui x1, -1", "lw x1, 2048(x2)", "sw x1, x2",
     "add x1, x2", "add x1, x2, x32", "foo x1, x2, x3", "clz x1, x2, x3", "fence rw",
     "fence wr, r", "rori x1, x2, 32", "bseti x1, x2, 32", "ecall x1", "csrrw x1, 0x300, x2",
-    "fld f0, 0(x1)", "addw x1, x2, x3",
+    "fld f0, 0(x1)", "addw x1, x2, x3", "addi x1, x2, 0x_", "addi x1, x2, 0b__",
 ]
 
 # --------------------------------------------------------------------------

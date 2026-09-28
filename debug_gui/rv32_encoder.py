@@ -306,7 +306,12 @@ def parse_int(text: str, what: str = "immediate") -> int:
     if s[:2].lower() in ("0x", "0b", "0o"):
         base = {"0x": 16, "0b": 2, "0o": 8}[s[:2].lower()]
         s = s[2:]
-    v = int(s.replace("_", ""), base)
+    digits = s.replace("_", "")
+    if not digits:
+        raise AsmError(f"invalid {what}: '{text.strip()}' (no digits)")
+    v = int(digits, base)
+    if v >= 1 << 52:   # far outside any field; also keeps the Lua port (doubles) exact
+        raise AsmError(f"invalid {what}: '{text.strip()}' (too large)")
     return -v if neg else v
 
 
