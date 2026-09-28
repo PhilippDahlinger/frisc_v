@@ -1,0 +1,9 @@
+{
+  "name": "one-line-assembler",
+  "version": "0.1.0",
+  "title": "FRISC-V One Line Assembler",
+  "author": "PhilippDahlinger",
+  "factorio_version": "2.1",
+  "dependencies": ["base >= 2.1"],
+  "description": "A constant combinator that assembles one RISC-V (RV32IMB) instruction and outputs its machine code as a signed 32-bit integer on signal D. Shows binary, hex and every instruction field. Debug tool for the FRISC-V CPU."
+}
