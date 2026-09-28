@@ -33,11 +33,20 @@ class ModRuntime(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
             f.write("\n".join(rows) + "\n")
             cases = f.name
+        # register display formatting: expected strings computed independently here
+        values = [0, 1, -1, 23, -2147483648, 2147483647] + [r.randint(-2**31, 2**31 - 1) for _ in range(3000)]
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            for v in values:
+                word = v & 0xFFFFFFFF
+                bits = format(word, "032b")
+                f.write(f"{v}\t{v}\t0x{word:08X}\t{' '.join(bits[i:i + 4] for i in range(0, 32, 4))}\n")
+            values_file = f.name
         try:
-            res = subprocess.run([LUA, os.path.join(HERE, "control_scenario.lua"), MOD_DIR, HERE, cases],
-                                 capture_output=True, text=True)
+            res = subprocess.run([LUA, os.path.join(HERE, "control_scenario.lua"), MOD_DIR, HERE, cases,
+                                  values_file], capture_output=True, text=True)
         finally:
             os.unlink(cases)
+            os.unlink(values_file)
         if res.returncode != 0 or not res.stdout.startswith("PASS"):
             self.fail(f"scenario failed:\n{res.stdout}\n{res.stderr}")
         print("\n  " + res.stdout.strip(), file=sys.stderr)

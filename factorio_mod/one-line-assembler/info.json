@@ -1,9 +1,11 @@
 {
   "name": "one-line-assembler",
-  "version": "0.1.0",
-  "title": "FRISC-V One Line Assembler",
+  "version": "0.2.0",
+  "title": "FRISC-V Debug Tools",
   "author": "PhilippDahlinger",
   "factorio_version": "2.1",
-  "dependencies": ["base >= 2.1"],
-  "description": "A constant combinator that assembles one RISC-V (RV32IMB) instruction and outputs its machine code as a signed 32-bit integer on signal D. Shows binary, hex and every instruction field. Debug tool for the FRISC-V CPU."
+  "dependencies": [
+    "base >= 2.1"
+  ],
+  "description": "Debug tools for the FRISC-V CPU. One line assembler: a constant combinator that assembles one RISC-V (RV32IMB) instruction and outputs its machine code on signal D. Register display: a display panel that shows all 32 registers (decimal, hex, binary) of the register memory cell it is wired to."
 }

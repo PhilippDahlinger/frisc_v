@@ -25,6 +25,7 @@ local TYPE_ADD_KEYS = {
   ["table"] = set_of{"column_count", "draw_horizontal_line_after_headers", "draw_horizontal_lines",
                      "draw_vertical_lines", "vertical_centering"},
   ["checkbox"] = set_of{"state"},
+  ["scroll-pane"] = set_of{"horizontal_scroll_policy", "vertical_scroll_policy"},
   ["sprite-button"] = set_of{"auto_toggle", "clicked_sprite", "hovered_sprite", "mouse_button_filter",
                              "number", "quality", "secondary_number", "show_percent_for_small_numbers",
                              "sprite", "toggled"},
@@ -238,7 +239,33 @@ function M.new_entity(name, opts)
   e.get_or_create_control_behavior = function() return cb end
   e.get_control_behavior = function() return cb end
   e.__cb = cb
+
+  -- circuit input (display panels etc.): values per wire, keyed by item name
+  e.__wires = {[0] = nil, [1] = nil}   -- set M.connect(e, wire, {name = value})
+  e.__get_signal_calls = 0
+  e.get_circuit_network = function(id)
+    if id ~= 0 and id ~= 1 then error("mock: bad wire_connector_id " .. tostring(id), 2) end
+    return e.__wires[id] and {valid = true, signals = e.__wires[id]} or nil
+  end
+  e.get_signal = function(signal, id1, id2)
+    if type(signal) ~= "table" or signal.type ~= "item" or signal.quality ~= "normal" then
+      error("mock: get_signal expects an item SignalID with quality", 2)
+    end
+    if not _G.prototypes.item[signal.name] then error("mock: unknown item signal " .. signal.name, 2) end
+    if id1 ~= 0 or id2 ~= 1 then error("mock: expected red + green wire connector ids", 2) end
+    e.__get_signal_calls = e.__get_signal_calls + 1
+    local total = 0
+    for _, id in ipairs({id1, id2}) do
+      local w = e.__wires[id]
+      if w and w[signal.name] then total = total + w[signal.name] end
+    end
+    return total
+  end
   return e
+end
+
+function M.connect(entity, wire, values)
+  entity.__wires[wire] = values
 end
 
 -- the (type, name, min) the entity currently outputs, as a list
@@ -262,10 +289,13 @@ function M.install()
   local event_names = {"on_gui_opened", "on_gui_closed", "on_gui_click", "on_gui_text_changed",
     "on_gui_checked_state_changed", "on_object_destroyed", "on_built_entity", "on_robot_built_entity",
     "on_space_platform_built_entity", "script_raised_built", "script_raised_revive", "on_entity_cloned",
-    "on_entity_settings_pasted"}
+    "on_entity_settings_pasted", "on_tick"}
   local events = {}
   for i, n in ipairs(event_names) do events[n] = i end
-  _G.defines = {events = events, gui_type = {entity = 6, custom = 5}}
+  _G.defines = {events = events, gui_type = {entity = 6, custom = 5},
+                wire_connector_id = {circuit_red = 0, circuit_green = 1}}
+  _G.prototypes = {item = {}}
+  for _, n in ipairs(M.ITEMS) do _G.prototypes.item[n] = {name = n} end
 
   M.handlers = handlers
   M.registered = {}
@@ -288,6 +318,7 @@ function M.install()
   M.players = players
   _G.game = {
     players = players,
+    tick = 0,
     get_player = function(i) return players[i] end,
   }
 end
@@ -300,8 +331,26 @@ function M.add_player(index)
   return p
 end
 
+-- items that exist in the mocked game (Space Age item set for the register signals)
+M.ITEMS = {"wooden-chest", "iron-chest", "steel-chest", "storage-tank", "transport-belt", "fast-transport-belt",
+  "express-transport-belt", "turbo-transport-belt", "underground-belt", "fast-underground-belt",
+  "express-underground-belt", "turbo-underground-belt", "splitter", "fast-splitter", "express-splitter",
+  "turbo-splitter", "burner-inserter", "inserter", "long-handed-inserter", "fast-inserter", "bulk-inserter",
+  "stack-inserter", "small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation", "pipe",
+  "pipe-to-ground", "pump", "rail", "rail-ramp", "rail-support", "train-stop"}
+
+-- advance the game by n ticks, firing on_tick if (and only if) a handler is registered
+function M.run_ticks(n)
+  for _ = 1, n do
+    game.tick = game.tick + 1
+    local h = M.handlers[defines.events.on_tick]
+    if h then h({name = defines.events.on_tick, tick = game.tick}) end
+  end
+end
+
 function M.fire(name, event)
   event.name = defines.events[name]
+  event.tick = event.tick or game.tick
   local h = M.handlers[defines.events[name]]
   if h then h(event) end
 end

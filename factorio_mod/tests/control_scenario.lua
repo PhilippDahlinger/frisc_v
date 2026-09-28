@@ -1,7 +1,8 @@
 -- Drives data.lua and control.lua through the mock runtime.
---   usage: lua5.2 control_scenario.lua <mod dir> <tests dir> <cases file>
+--   usage: lua5.2 control_scenario.lua <mod dir> <tests dir> <cases file> <values file>
 -- cases file: one "<instruction>\t<expected signed int or ERR>" per line.
-local mod_dir, tests_dir, cases_file = arg[1], arg[2], arg[3]
+-- values file: one "<int32>\t<dec>\t<hex>\t<bin>" per line (expected register formatting).
+local mod_dir, tests_dir, cases_file, values_file = arg[1], arg[2], arg[3], arg[4]
 package.path = mod_dir .. "/?.lua;" .. tests_dir .. "/?.lua;" .. package.path
 
 local checks = 0
@@ -33,7 +34,14 @@ do
       name = "constant-combinator", icon = "__base__/graphics/icons/constant-combinator.png",
       minable = {mining_time = 0.1, result = "constant-combinator"},
       sprites = {north = dir_sprite(), east = dir_sprite(), south = dir_sprite(), west = dir_sprite()}}},
+    ["display-panel"] = {["display-panel"] = {type = "display-panel", name = "display-panel",
+      icon = "__base__/graphics/icons/display-panel.png", icon_size = 64,
+      minable = {mining_time = 0.2, result = "display-panel"},
+      sprites = {north = dir_sprite(), east = dir_sprite(), south = dir_sprite(), west = dir_sprite()}}},
   }}
+  data.raw["item"]["display-panel"] = {type = "item", name = "display-panel",
+    icon = "__base__/graphics/icons/display-panel.png", icon_size = 64, subgroup = "circuit-network",
+    order = "s[display-panel]", place_result = "display-panel", stack_size = 10}
   local extended = {}
   function data.extend(self, list)
     for _, p in ipairs(list) do
@@ -44,7 +52,13 @@ do
     end
   end
   dofile(mod_dir .. "/data.lua")
-  check(#extended == 2, "data.lua adds exactly two prototypes")
+  check(#extended == 4, "data.lua adds exactly four prototypes")
+  local d = data.raw["display-panel"]["register-display"]
+  local di = data.raw["item"]["register-display"]
+  check(d and d.minable.result == "register-display" and d.minable.mining_time == 0.2, "display mines into item")
+  check(di and di.place_result == "register-display" and di.icons[1].tint, "display item places entity")
+  check(d.sprites.west.layers[1].tint and not d.sprites.west.layers[2].tint, "display body tinted")
+  check(data.raw["display-panel"]["display-panel"].sprites.north.layers[1].tint == nil, "base panel untouched")
   local e = data.raw["constant-combinator"]["one-line-assembler"]
   local i = data.raw["item"]["one-line-assembler"]
   check(e and e.minable.result == "one-line-assembler", "entity mines into its own item")
@@ -180,6 +194,126 @@ mock.fire("on_gui_closed", {player_index = 1, element = frame_of(p1), gui_type =
 mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = bp})
 mock.handlers.config({})
 check(frame_of(p1) == nil, "configuration change closes GUIs")
+
+-- ------------------------------------------------------ register display
+local rd = require("register_display")
+local ON_TICK = defines.events.on_tick
+local function display_frame(p) return p.gui.screen.frd_frame end
+local function reg_row(p, reg)
+  -- table children: 6 header cells, then 6 cells per register x0..x31
+  local tbl = display_frame(p).frd_inner.children[2].children[1]
+  local base = 6 + reg * 6
+  local c = tbl.children
+  return {reg = c[base + 1], abi = c[base + 2], sig = c[base + 3], dec = c[base + 4], hex = c[base + 5],
+          bin = c[base + 6]}
+end
+local function color_of(el) return el.style.font_color end
+
+check(#rd.REGISTER_SIGNALS == 31, "31 register signals")
+check(rd.REGISTER_SIGNALS[1] == "wooden-chest" and rd.REGISTER_SIGNALS[31] == "rail-ramp", "x1..x31 mapping")
+check(mock.handlers[ON_TICK] == nil, "no on_tick handler before any display GUI is open")
+
+local disp = mock.new_entity("register-display", {type = "display-panel"})
+local regs = {["wooden-chest"] = 23, ["iron-chest"] = -1, ["rail-ramp"] = -2147483648, ["stack-inserter"] = 2147483647}
+mock.connect(disp, 0, regs)
+mock.run_ticks(5)
+check(disp.__get_signal_calls == 0, "nothing is read while no GUI is open")
+
+mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = disp})
+check(display_frame(p1) and p1.opened == display_frame(p1), "display GUI opened")
+check(mock.handlers[ON_TICK] ~= nil, "on_tick registered while GUI open")
+local r0, r1, r2, r8 = reg_row(p1, 0), reg_row(p1, 1), reg_row(p1, 2), reg_row(p1, 8)
+check(r0.reg.caption == "x0" and r0.abi.caption == "zero" and r0.dec.caption == "0", "x0 row")
+check(r1.reg.caption == "x1" and r1.abi.caption == "ra" and r1.sig.caption == "[item=wooden-chest]", "x1 = ra = wooden chest")
+check(r1.dec.caption == "23" and r1.hex.caption == "0x00000017" and r1.bin.caption == "0000 0000 0000 0000 0000 0000 0001 0111", "x1 value")
+check(r2.abi.caption == "sp" and r2.dec.caption == "-1" and r2.hex.caption == "0xFFFFFFFF", "x2 = sp = -1")
+check(r8.abi.caption == "s0 / fp", "x8 = s0 / fp")
+check(reg_row(p1, 31).dec.caption == "-2147483648" and reg_row(p1, 31).hex.caption == "0x80000000", "x31 = INT32_MIN")
+check(reg_row(p1, 22).dec.caption == "2147483647" and reg_row(p1, 22).sig.caption == "[item=stack-inserter]", "x22 = stack inserter")
+check(reg_row(p1, 5).dec.caption == "0" and color_of(reg_row(p1, 5).dec)[1] < 0.6, "unset register shows grey 0")
+check(mock.all_captions(display_frame(p1)):find("Reading red wire", 1, true), "wire status shown")
+
+-- live update with highlight, then highlight fades
+regs["wooden-chest"] = 42
+mock.run_ticks(1)
+check(r1.dec.caption == "42", "value updates on tick")
+check(color_of(r1.dec)[3] < 0.5, "changed value highlighted")
+mock.run_ticks(59)
+check(color_of(r1.dec)[3] < 0.5, "still highlighted before one second")
+mock.run_ticks(1)
+check(color_of(r1.dec)[3] == 1, "highlight gone after one second")
+
+-- green wire adds to red (circuit networks sum)
+mock.connect(disp, 1, {["wooden-chest"] = 8})
+mock.run_ticks(30)
+check(r1.dec.caption == "50", "red + green are summed")
+check(mock.all_captions(display_frame(p1)):find("Reading red + green wire", 1, true), "both wires detected")
+
+-- freeze
+local freeze = display_frame(p1).frd_inner.children[1].frd_freeze
+freeze.state = true
+mock.fire("on_gui_checked_state_changed", {player_index = 1, element = freeze})
+regs["wooden-chest"] = 1000
+mock.run_ticks(3)
+check(r1.dec.caption == "50", "frozen display does not update")
+freeze.state = false
+mock.fire("on_gui_checked_state_changed", {player_index = 1, element = freeze})
+check(r1.dec.caption == "1008", "unfreeze refreshes immediately")
+
+-- second viewer; handler stays until the last one closes
+mock.fire("on_gui_opened", {player_index = 2, gui_type = ENTITY_GUI, entity = disp})
+check(reg_row(p2, 1).dec.caption == "1008", "second player sees values")
+mock.fire("on_gui_click", {player_index = 2, element = display_frame(p2).children[1].frd_close})
+check(display_frame(p2) == nil and mock.handlers[ON_TICK] ~= nil, "p2 closed, tick handler kept for p1")
+mock.fire("on_gui_closed", {player_index = 1, element = display_frame(p1), gui_type = defines.gui_type.custom})
+check(display_frame(p1) == nil and mock.handlers[ON_TICK] == nil, "last GUI closed -> on_tick unregistered")
+local calls = disp.__get_signal_calls
+mock.run_ticks(100)
+check(disp.__get_signal_calls == calls, "zero reads after closing")
+
+-- on_load re-registers the tick handler for GUIs open at save time
+mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = disp})
+mock.handlers[ON_TICK] = nil           -- simulate a fresh load: handlers are not saved
+mock.handlers.load()
+check(mock.handlers[ON_TICK] ~= nil, "on_load restores on_tick when a display GUI is open")
+
+-- wire removed, then entity destroyed
+mock.connect(disp, 0, nil); mock.connect(disp, 1, nil)
+mock.run_ticks(30)
+check(mock.all_captions(display_frame(p1)):find("No wire connected", 1, true), "missing wire reported")
+check(reg_row(p1, 1).dec.caption == "0" and reg_row(p1, 2).dec.caption == "0", "values drop to 0 without wire")
+disp.valid = false
+mock.fire("on_object_destroyed", {registration_number = 2, useful_id = 0, type = 1})
+check(display_frame(p1) == nil and mock.handlers[ON_TICK] == nil, "destroyed entity closes GUI + unregisters")
+
+-- the assembler and the display do not interfere
+local disp2 = mock.new_entity("register-display", {type = "display-panel"})
+mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = disp2})
+check(frame_of(p1) == nil and display_frame(p1) ~= nil, "display entity opens only the display GUI")
+mock.fire("on_gui_closed", {player_index = 1, element = display_frame(p1), gui_type = defines.gui_type.custom})
+local vanilla_panel = mock.new_entity("display-panel", {type = "display-panel"})
+mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = vanilla_panel})
+check(display_frame(p1) == nil, "vanilla display panel keeps its own GUI")
+
+-- missing item (e.g. Space Age disabled): row shows n/a, never read
+prototypes.item["rail-ramp"] = nil
+local disp3 = mock.new_entity("register-display", {type = "display-panel"})
+mock.connect(disp3, 0, {["wooden-chest"] = 7})
+mock.fire("on_gui_opened", {player_index = 1, gui_type = ENTITY_GUI, entity = disp3})
+mock.run_ticks(2)
+check(reg_row(p1, 31).dec.caption == "n/a" and reg_row(p1, 1).dec.caption == "7", "missing item handled")
+mock.fire("on_gui_closed", {player_index = 1, element = display_frame(p1), gui_type = defines.gui_type.custom})
+prototypes.item["rail-ramp"] = {name = "rail-ramp"}
+
+-- value formatting vs Python, for many values
+local nvals = 0
+for line in io.lines(values_file) do
+  local v, dec, hex, bin = line:match("^(.-)\t(.-)\t(.-)\t(.*)$")
+  local d2, h2, b2 = rd.format_value(tonumber(v))
+  check(d2 == dec and h2 == hex and b2 == bin, "format " .. v .. ": " .. d2 .. " " .. h2 .. " " .. b2)
+  nvals = nvals + 1
+end
+check(nvals > 1000, "formatting cases present")
 
 -- bulk: every case through the full GUI path
 local target = mock.new_entity("one-line-assembler")
