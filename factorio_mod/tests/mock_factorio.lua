@@ -1,7 +1,7 @@
--- Minimal, strict mock of the Factorio 2.1 runtime API used by control.lua.
+-- Minimal, strict mock of the Factorio 2.0 runtime API used by control.lua.
 -- It exists to run control.lua outside the game: unknown GUI parameters, style
 -- properties, style names or malformed logistic filters raise errors, so typos
--- and API misuse show up in tests. Allowed names come from the 2.1.20 runtime
+-- and API misuse show up in tests. Allowed names come from the 2.0.77 runtime
 -- API (factorio-types) and core/prototypes/style.lua.
 
 local M = {}
@@ -27,7 +27,7 @@ local TYPE_ADD_KEYS = {
   ["checkbox"] = set_of{"state"},
   ["scroll-pane"] = set_of{"horizontal_scroll_policy", "vertical_scroll_policy"},
   ["sprite-button"] = set_of{"auto_toggle", "clicked_sprite", "hovered_sprite", "mouse_button_filter",
-                             "number", "quality", "secondary_number", "show_percent_for_small_numbers",
+                             "number", "quality", "show_percent_for_small_numbers",
                              "sprite", "toggled"},
 }
 local STYLE_PROPS = set_of{"bottom_margin", "bottom_padding", "cell_padding", "font", "font_color",
@@ -292,7 +292,7 @@ function M.install()
     "on_entity_settings_pasted", "on_tick"}
   local events = {}
   for i, n in ipairs(event_names) do events[n] = i end
-  _G.defines = {events = events, gui_type = {entity = 6, custom = 5},
+  _G.defines = {events = events, gui_type = {entity = 5, custom = 4},
                 wire_connector_id = {circuit_red = 0, circuit_green = 1}}
   _G.prototypes = {item = {}}
   for _, n in ipairs(M.ITEMS) do _G.prototypes.item[n] = {name = n} end

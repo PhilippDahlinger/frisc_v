@@ -1,6 +1,6 @@
 # factorio_mod: FRISC-V Debug Tools
 
-A Factorio **2.1** mod (internal name `one-line-assembler`) with two debug tools for the FRISC-V CPU. Neither
+A Factorio **2.0** mod (requires **Space Age**; internal name `one-line-assembler`) with two debug tools for the FRISC-V CPU. Neither
 has a recipe, so get them from the map editor (`/editor`) or with:
 
 ```
@@ -34,7 +34,7 @@ A display panel (tinted orange). Wire it with red and/or green wire to the **reg
 * A table of all 32 registers: `x0`–`x31`, ABI name (`zero`, `ra`, `sp`, …, `s0 / fp`, …), the signal, the value
   as **signed decimal**, **hex** (two's complement) and **binary** (grouped in 4s).
 * `x0` is hard-wired to 0 and has no signal. `x1`–`x31` are the first 31 signals of the Logistics group
-  (Space Age):
+  (Space Age, Factorio 2.0):
 
   | | | | |
   |---|---|---|---|
@@ -67,7 +67,7 @@ python factorio_mod/build_mod.py     # -> factorio_mod/dist/one-line-assembler_<
 
 | File | Purpose |
 |---|---|
-| `one-line-assembler/info.json` | mod metadata (`factorio_version` 2.1) |
+| `one-line-assembler/info.json` | mod metadata (`factorio_version` 2.0, needs base and space-age >= 2.0.32) |
 | `one-line-assembler/data.lua` | both entities and items, tinted copies of constant combinator and display panel; no recipes |
 | `one-line-assembler/control.lua` | dispatches events to the two feature modules |
 | `one-line-assembler/assembler.lua` | One line assembler GUI and signal output |
@@ -85,7 +85,7 @@ python -m unittest discover -s factorio_mod/tests -v
 * `test_lua_parity.py` runs the Lua encoder and the Python encoder (which is cross-checked against
   `llvm-mc`) on ~31,000 inputs. Everything must match exactly: word, signed value, fields, meanings and error messages.
 * `test_mod_runtime.py` runs `data.lua` and `control.lua` against `tests/mock_factorio.lua`, a strict mock of
-  the 2.1 runtime API. It rejects unknown GUI parameters, style properties, style/font/sprite names, invalid
+  the 2.0 runtime API. It rejects unknown GUI parameters, style properties, style/font/sprite names, invalid
   logistic filters and malformed signal reads.
   * Assembler: opening, typing, on/off, two players, closing, destroying, blueprints, pasting and ghosts,
     plus ~1,900 instructions with the exact signal D value checked for each.
@@ -97,5 +97,5 @@ python -m unittest discover -s factorio_mod/tests -v
     * decimal/hex/binary formatting checked against Python for 3,000 random values
 
 **Not tested in the real game:** the sandbox this was built in can't download Factorio. API names come
-from the 2.1.20 runtime API definitions and the `wube/factorio-data` prototypes. Please try it in game.
+from the 2.0.77 runtime API definitions and the `wube/factorio-data` 2.0.77 prototypes. Please try it in game.
 Things that could only show up there are layout or visual issues, and API behavior the mock gets wrong.

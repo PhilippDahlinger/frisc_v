@@ -14,7 +14,7 @@ local FRAME = "frd_frame"
 local HIGHLIGHT_TICKS = 60   -- changed values stay highlighted for one second
 
 -- x1..x31 = the first 31 signals of the "Logistics" signal group with Space Age
--- (Factorio 2.1): storage, belts, inserters, poles/pipes, rails.
+-- (same order in Factorio 2.0.77 and 2.1): storage, belts, inserters, poles/pipes, rails.
 local REGISTER_SIGNALS = {
   "wooden-chest", "iron-chest", "steel-chest", "storage-tank",                        -- x1  - x4
   "transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt", -- x5  - x8
