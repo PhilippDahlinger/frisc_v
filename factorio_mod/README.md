@@ -31,8 +31,9 @@ Supported instructions, syntax and encodings are the same as `debug_gui` (see it
 
 A display panel (tinted orange). Wire it with red and/or green wire to the **register memory cell**, then open it:
 
-* A table of all 32 registers: `x0`–`x31`, ABI name (`zero`, `ra`, `sp`, …, `s0 / fp`, …), the signal, the value
-  as **signed decimal**, **hex** (two's complement) and **binary** (grouped in 4s).
+* A table of all 32 registers. Columns: the ABI name in bold (`zero`, `ra`, `sp`, …, `s0 / fp`, …), then
+  `x0`–`x31`, the signal, and the value as **signed** decimal, **unsigned** decimal, **hex** (two's complement)
+  and **binary** (grouped in 4s).
 * `x0` is hard-wired to 0 and has no signal. `x1`–`x31` are the first 31 signals of the Logistics group
   (Space Age, Factorio 2.0):
 
@@ -94,7 +95,8 @@ python -m unittest discover -s factorio_mod/tests -v
     * red + green wires summed, freeze, two viewers
     * `on_tick` removed after the last window closes, with zero signal reads while closed
     * `on_load` restores the handler; missing wires, a destroyed entity and missing items are handled
-    * decimal/hex/binary formatting checked against Python for 3,000 random values
+    * column order, bold ABI names, and signed/unsigned/hex/binary formatting checked against Python for
+      3,000 random values
 
 **Not tested in the real game:** the sandbox this was built in can't download Factorio. API names come
 from the 2.0.77 runtime API definitions and the `wube/factorio-data` 2.0.77 prototypes. Please try it in game.

@@ -39,7 +39,7 @@ class ModRuntime(unittest.TestCase):
             for v in values:
                 word = v & 0xFFFFFFFF
                 bits = format(word, "032b")
-                f.write(f"{v}\t{v}\t0x{word:08X}\t{' '.join(bits[i:i + 4] for i in range(0, 32, 4))}\n")
+                f.write(f"{v}\t{v}\t{word}\t0x{word:08X}\t{' '.join(bits[i:i + 4] for i in range(0, 32, 4))}\n")
             values_file = f.name
         try:
             res = subprocess.run([LUA, os.path.join(HERE, "control_scenario.lua"), MOD_DIR, HERE, cases,

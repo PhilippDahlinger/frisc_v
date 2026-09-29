@@ -37,7 +37,7 @@ local STYLE_PROPS = set_of{"bottom_margin", "bottom_padding", "cell_padding", "f
   "single_line", "size", "top_margin", "top_padding", "vertical_align", "vertical_spacing",
   "vertically_squashable", "vertically_stretchable", "width"}
 local STYLE_NAMES = set_of{"frame_title", "draggable_space_header", "frame_action_button",
-  "inside_shallow_frame_with_padding", "semibold_label", "bordered_table"}
+  "inside_shallow_frame_with_padding", "semibold_label", "bold_label", "bordered_table"}
 local FONTS = set_of{"default", "default-semibold", "default-bold", "default-large", "default-large-semibold",
   "default-large-bold", "default-small", "default-small-semibold", "default-small-bold"}
 local SPRITES = set_of{"utility/close"}

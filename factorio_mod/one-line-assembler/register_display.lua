@@ -46,18 +46,26 @@ M.REGISTER_SIGNALS = REGISTER_SIGNALS
 -- Formatting
 -- --------------------------------------------------------------------------
 
+-- signed int32 -> signed decimal, unsigned decimal, hex, binary (grouped in 4s)
 local function format_value(v)
   local word = v % 4294967296
   local bin = encoder.bin_str(word, 32)
   local groups = {}
   for i = 1, 32, 4 do groups[#groups + 1] = bin:sub(i, i + 3) end
-  return string.format("%d", v), "0x" .. encoder.hex_str(word, 8), table.concat(groups, " ")
+  return string.format("%d", v), string.format("%d", word), "0x" .. encoder.hex_str(word, 8),
+         table.concat(groups, " ")
 end
 M.format_value = format_value
 
+local VALUE_CELLS = {"dec", "udec", "hex", "bin"}   -- value columns, in table order
+
+local function set_row_color(row, color)
+  for _, cell in ipairs(VALUE_CELLS) do row[cell].style.font_color = color end
+end
+
 -- --------------------------------------------------------------------------
 -- State: storage.register_display.viewers[player_index] = {
---   entity, rows = {[reg] = {dec, hex, bin} gui elements}, values, changed_at,
+--   entity, rows = {[reg] = {dec, udec, hex, bin} gui elements}, values, changed_at,
 --   status (label), frozen }
 -- --------------------------------------------------------------------------
 
@@ -115,22 +123,16 @@ local function refresh(viewer, tick, force)
       if force or v ~= viewer.values[reg] then
         local first = viewer.values[reg] == nil
         viewer.values[reg] = v
-        local dec, hex, bin = format_value(v)
-        row.dec.caption, row.hex.caption, row.bin.caption = dec, hex, bin
+        row.dec.caption, row.udec.caption, row.hex.caption, row.bin.caption = format_value(v)
         local color = v == 0 and COLORS.zero or COLORS.normal
         if not first and not force then
           color = COLORS.changed
           viewer.changed_at[reg] = tick
         end
-        row.dec.style.font_color = color
-        row.hex.style.font_color = color
-        row.bin.style.font_color = color
+        set_row_color(row, color)
       elseif viewer.changed_at[reg] and tick - viewer.changed_at[reg] >= HIGHLIGHT_TICKS then
         viewer.changed_at[reg] = nil
-        local color = v == 0 and COLORS.zero or COLORS.normal
-        row.dec.style.font_color = color
-        row.hex.style.font_color = color
-        row.bin.style.font_color = color
+        set_row_color(row, v == 0 and COLORS.zero or COLORS.normal)
       end
     end
   end
@@ -191,39 +193,41 @@ local function open_gui(player, entity)
                            vertical_scroll_policy = "auto-and-reserve-space"}
   scroll.style.maximal_height = 820
   scroll.style.top_margin = 6
-  local tbl = scroll.add{type = "table", column_count = 6, style = "bordered_table"}
+  -- columns: ABI name (bold) | x name | signal | signed | unsigned | hex | binary
+  local tbl = scroll.add{type = "table", column_count = 7, style = "bordered_table"}
   tbl.style.horizontal_spacing = 14
-  for _, h in ipairs({"Reg", "ABI", "Signal", "Decimal (signed)", "Hex", "Binary"}) do
+  for _, h in ipairs({"ABI", "Reg", "Signal", "Signed", "Unsigned", "Hex", "Binary"}) do
     label(tbl, h, {style = "semibold_label"})
   end
 
   -- x0: hard-wired zero, no signal
-  local dec0, hex0, bin0 = format_value(0)
-  label(tbl, "x0", {style = "semibold_label"})
-  label(tbl, encoder.ABI_NAMES[1], {color = COLORS.dim})
+  local dec0, udec0, hex0, bin0 = format_value(0)
+  label(tbl, encoder.ABI_NAMES[1], {style = "bold_label"})
+  label(tbl, "x0", {color = COLORS.dim})
   label(tbl, "–", {color = COLORS.dim, tooltip = "x0 is hard-wired to 0 and has no signal"})
-  label(tbl, dec0, {color = COLORS.zero, width = 110})
+  label(tbl, dec0, {color = COLORS.zero, width = 100})
+  label(tbl, udec0, {color = COLORS.zero, width = 90})
   label(tbl, hex0, {color = COLORS.zero, width = 90})
   label(tbl, bin0, {color = COLORS.zero})
 
   local rows, signal_ids = {}, {}
   for reg = 1, 31 do
     local name = REGISTER_SIGNALS[reg]
-    label(tbl, "x" .. reg, {style = "semibold_label"})
-    label(tbl, encoder.ABI_NAMES[reg + 1] .. (reg == 8 and " / fp" or ""), {color = COLORS.dim})
+    label(tbl, encoder.ABI_NAMES[reg + 1] .. (reg == 8 and " / fp" or ""), {style = "bold_label"})
+    label(tbl, "x" .. reg, {color = COLORS.dim})
     if prototypes.item[name] then
       label(tbl, "[item=" .. name .. "]", {tooltip = name})
       signal_ids[reg] = {type = "item", name = name, quality = "normal"}
       rows[reg] = {
-        dec = label(tbl, "", {width = 110}),
+        dec = label(tbl, "", {width = 100}),
+        udec = label(tbl, "", {width = 90}),
         hex = label(tbl, "", {width = 90}),
         bin = label(tbl, ""),
       }
     else
       label(tbl, "?", {color = COLORS.error, tooltip = "item '" .. name .. "' does not exist (Space Age off?)"})
       label(tbl, "n/a", {color = COLORS.error})
-      label(tbl, "", {})
-      label(tbl, "", {})
+      for _ = 1, 3 do label(tbl, "", {}) end
     end
   end
 

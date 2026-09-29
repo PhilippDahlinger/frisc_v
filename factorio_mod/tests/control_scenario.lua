@@ -1,7 +1,7 @@
 -- Drives data.lua and control.lua through the mock runtime.
 --   usage: lua5.2 control_scenario.lua <mod dir> <tests dir> <cases file> <values file>
 -- cases file: one "<instruction>\t<expected signed int or ERR>" per line.
--- values file: one "<int32>\t<dec>\t<hex>\t<bin>" per line (expected register formatting).
+-- values file: one "<int32>\t<dec>\t<unsigned>\t<hex>\t<bin>" per line (expected register formatting).
 local mod_dir, tests_dir, cases_file, values_file = arg[1], arg[2], arg[3], arg[4]
 package.path = mod_dir .. "/?.lua;" .. tests_dir .. "/?.lua;" .. package.path
 
@@ -200,12 +200,14 @@ local rd = require("register_display")
 local ON_TICK = defines.events.on_tick
 local function display_frame(p) return p.gui.screen.frd_frame end
 local function reg_row(p, reg)
-  -- table children: 6 header cells, then 6 cells per register x0..x31
+  -- table children: 7 header cells, then 7 cells per register x0..x31:
+  -- ABI | reg | signal | signed | unsigned | hex | binary
   local tbl = display_frame(p).frd_inner.children[2].children[1]
-  local base = 6 + reg * 6
+  check(tbl.column_count == 7, "register table has 7 columns")
+  local base = 7 + reg * 7
   local c = tbl.children
-  return {reg = c[base + 1], abi = c[base + 2], sig = c[base + 3], dec = c[base + 4], hex = c[base + 5],
-          bin = c[base + 6]}
+  return {abi = c[base + 1], reg = c[base + 2], sig = c[base + 3], dec = c[base + 4], udec = c[base + 5],
+          hex = c[base + 6], bin = c[base + 7]}
 end
 local function color_of(el) return el.style.font_color end
 
@@ -225,10 +227,19 @@ check(mock.handlers[ON_TICK] ~= nil, "on_tick registered while GUI open")
 local r0, r1, r2, r8 = reg_row(p1, 0), reg_row(p1, 1), reg_row(p1, 2), reg_row(p1, 8)
 check(r0.reg.caption == "x0" and r0.abi.caption == "zero" and r0.dec.caption == "0", "x0 row")
 check(r1.reg.caption == "x1" and r1.abi.caption == "ra" and r1.sig.caption == "[item=wooden-chest]", "x1 = ra = wooden chest")
-check(r1.dec.caption == "23" and r1.hex.caption == "0x00000017" and r1.bin.caption == "0000 0000 0000 0000 0000 0000 0001 0111", "x1 value")
-check(r2.abi.caption == "sp" and r2.dec.caption == "-1" and r2.hex.caption == "0xFFFFFFFF", "x2 = sp = -1")
+check(r1.dec.caption == "23" and r1.udec.caption == "23" and r1.hex.caption == "0x00000017"
+      and r1.bin.caption == "0000 0000 0000 0000 0000 0000 0001 0111", "x1 value")
+check(r2.abi.caption == "sp" and r2.dec.caption == "-1" and r2.udec.caption == "4294967295"
+      and r2.hex.caption == "0xFFFFFFFF", "x2 = sp = -1 / 4294967295")
+local header = display_frame(p1).frd_inner.children[2].children[1].children
+check(header[1].caption == "ABI" and header[2].caption == "Reg" and header[5].caption == "Unsigned", "header order")
+for reg = 0, 31 do
+  local row = reg_row(p1, reg)
+  check(row.abi.style_name == "bold_label" and row.reg.caption == "x" .. reg, "ABI bold first, then x" .. reg)
+end
 check(r8.abi.caption == "s0 / fp", "x8 = s0 / fp")
-check(reg_row(p1, 31).dec.caption == "-2147483648" and reg_row(p1, 31).hex.caption == "0x80000000", "x31 = INT32_MIN")
+check(reg_row(p1, 31).dec.caption == "-2147483648" and reg_row(p1, 31).udec.caption == "2147483648"
+      and reg_row(p1, 31).hex.caption == "0x80000000", "x31 = INT32_MIN")
 check(reg_row(p1, 22).dec.caption == "2147483647" and reg_row(p1, 22).sig.caption == "[item=stack-inserter]", "x22 = stack inserter")
 check(reg_row(p1, 5).dec.caption == "0" and color_of(reg_row(p1, 5).dec)[1] < 0.6, "unset register shows grey 0")
 check(mock.all_captions(display_frame(p1)):find("Reading red wire", 1, true), "wire status shown")
@@ -237,11 +248,12 @@ check(mock.all_captions(display_frame(p1)):find("Reading red wire", 1, true), "w
 regs["wooden-chest"] = 42
 mock.run_ticks(1)
 check(r1.dec.caption == "42", "value updates on tick")
-check(color_of(r1.dec)[3] < 0.5, "changed value highlighted")
+check(color_of(r1.dec)[3] < 0.5 and color_of(r1.udec)[3] < 0.5 and color_of(r1.bin)[3] < 0.5,
+      "changed value highlighted in all value columns")
 mock.run_ticks(59)
 check(color_of(r1.dec)[3] < 0.5, "still highlighted before one second")
 mock.run_ticks(1)
-check(color_of(r1.dec)[3] == 1, "highlight gone after one second")
+check(color_of(r1.dec)[3] == 1 and color_of(r1.udec)[3] == 1, "highlight gone after one second")
 
 -- green wire adds to red (circuit networks sum)
 mock.connect(disp, 1, {["wooden-chest"] = 8})
@@ -308,9 +320,10 @@ prototypes.item["rail-ramp"] = {name = "rail-ramp"}
 -- value formatting vs Python, for many values
 local nvals = 0
 for line in io.lines(values_file) do
-  local v, dec, hex, bin = line:match("^(.-)\t(.-)\t(.-)\t(.*)$")
-  local d2, h2, b2 = rd.format_value(tonumber(v))
-  check(d2 == dec and h2 == hex and b2 == bin, "format " .. v .. ": " .. d2 .. " " .. h2 .. " " .. b2)
+  local v, dec, udec, hex, bin = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.*)$")
+  local d2, u2, h2, b2 = rd.format_value(tonumber(v))
+  check(d2 == dec and u2 == udec and h2 == hex and b2 == bin,
+        "format " .. v .. ": " .. d2 .. " " .. u2 .. " " .. h2 .. " " .. b2)
   nvals = nvals + 1
 end
 check(nvals > 1000, "formatting cases present")
