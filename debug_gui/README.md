@@ -22,7 +22,7 @@ pip install -r requirements.txt
 python gui.py
 ```
 
-## Supported instructions (RV32 I + M + B)
+## Supported instructions (RV32 I + M + B + Zicsr + privileged)
 
 | Extension | Instructions |
 |---|---|
@@ -31,7 +31,9 @@ python gui.py
 | B = Zba | `sh1add sh2add sh3add` |
 | B = Zbb | `andn orn xnor clz ctz cpop max maxu min minu sext.b sext.h zext.h rol ror rori orc.b rev8` |
 | B = Zbs | `bclr bclri bext bexti binv binvi bset bseti` |
-| Pseudo | `nop mv not seqz snez j jr ret bgt bgtu ble bleu` (only those defined in the spec) |
+| Zicsr | `csrrw csrrs csrrc csrrwi csrrsi csrrci` |
+| Privileged | `mret wfi` (machine mode), `sret sfence.vma` (supervisor mode) |
+| Pseudo | `nop mv not seqz snez j jr ret bgt bgtu ble bleu csrr csrw csrs csrc csrwi csrsi csrci rdcycle[h] rdtime[h] rdinstret[h]` (only those defined in the spec) |
 
 Syntax notes:
 
@@ -41,6 +43,10 @@ Syntax notes:
   It must be even. Range: ±4 KiB for branches, ±1 MiB for `jal`.
 * `lui` / `auipc` take the 20-bit upper immediate (`0` … `0xFFFFF`), as in `lui x1, 0x12345`.
 * Immediates can be written in decimal, `0x` hex, `0b` binary or `0o` octal.
+* CSR operands are a 12-bit number (`0x300`) or a name: `cycle time instret` (+`h`), `mvendorid marchid mimpid
+  mhartid mconfigptr`, `mstatus misa medeleg mideleg mie mtvec mcounteren mstatush mcountinhibit`,
+  `mscratch mepc mcause mtval mip`, `mcycle minstret` (+`h`). Example: `csrrw t0, mstatus, t1`, `csrr a0, mepc`.
+* `sfence.vma` takes 0, 1 or 2 registers (`sfence.vma`, `sfence.vma rs1`, `sfence.vma rs1, rs2`).
 
 ## Where the encodings come from
 
@@ -49,6 +55,11 @@ from the Chapter 36 listings (RV32I, RV32M), and the B extension from §30.1–3
 encodings (`rev8`, `zext.h` and the shift-immediates differ on RV64). The source for each part is
 cited at the top of `rv32_encoder.py`. The ABI register names are the one exception: they come from the
 psABI, not the ISA spec.
+
+The CSR instructions come from Volume I as well (§6.1 and the Chapter 36 Zicsr table). The privileged parts
+follow `../riscv-privileged.pdf`: `mret`, `sret`, `wfi` and `sfence.vma` from Chapter 19 (Figure 125), and the
+CSR names and addresses from §2.2 (Table 4 for the counters, Table 7 for the machine-level CSRs). The field
+view shows `mret`/`sret`/`wfi` split as funct7 + rs2 exactly like Figure 125.
 
 Every encoding is also checked two ways. The encoder packs the fields, checks that they cover exactly
 32 bits, then decodes the immediate back out of the word (Figure 1 of the spec) and compares it to the input.
@@ -60,9 +71,9 @@ cd debug_gui
 python -m unittest discover -s tests -v
 ```
 
-* Golden vectors plus invalid-input checks, such as out-of-range immediates, odd branch offsets and
-  instructions outside RV32IMB.
-* If LLVM's `llvm-mc` is installed, a randomized cross-check assembles ~27,000 random instances of every
-  supported instruction and pseudoinstruction with
-  `llvm-mc -triple=riscv32 -mattr=+m,+zba,+zbb,+zbs` and compares every word.
+* Golden vectors plus invalid-input checks, such as out-of-range immediates, odd branch offsets, CSR numbers
+  outside 0…0xFFF, unknown CSR names and instructions outside the supported set.
+* If LLVM's `llvm-mc` is installed, a randomized cross-check assembles ~34,000 random instances of every
+  supported instruction and pseudoinstruction (CSR operands as random numbers and names) with
+  `llvm-mc -triple=riscv32 -mattr=+m,+zba,+zbb,+zbs,+zihintpause,+zicsr,+zicntr` and compares every word.
 * Round-trip tests for the number converter.

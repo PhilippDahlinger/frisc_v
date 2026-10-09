@@ -65,6 +65,12 @@ EDGE_CASES = [
     "clz x1, x2", "rev8 a0, a1", "zext.h t0, t1", "rori x1, x2, 31", "bseti x1, x2, 32",
     "nop x1", "mv x1", "bgt x1, x2", "unknown x1", "add.uw x1, x2, x3", "csrrw x1, 0x300, x2",
     "sub x0, x0, x0", "mulh zero, ra, sp", "sltiu x1, x2, -1", "not a0, a1", "seqz a0, a1",
+    "csrrw x1, MSTATUS, x2", "csrrw x1, 0x_, x2", "csrrw x1, -1, x2", "csrrs x1, 4095, x0",
+    "csrrs x1, 0xFFF, x0", "csrrs x1, 4096, x0", "csrrw x1, mstatus", "csrrwi x1, mie, -1",
+    "csrrwi x0, mtvec, 0", "csrrc t0, mip, x0", "csrr a0", "csrr a0, mepc, x1", "csrw mtvec",
+    "rdcycle", "rdcycleh a0", "rdinstreth t0", "rdtime a0, a1", "rdfoo a0", "mret", "wfi x0",
+    "sret", "sfence.vma", "sfence.vma x1", "sfence.vma x1, x2", "sfence.vma x1, x2, x3",
+    "sfence.vma 5", "csrrw x1, cycle, x2", "csrrs x1, 0x300, x0",
 ]
 
 

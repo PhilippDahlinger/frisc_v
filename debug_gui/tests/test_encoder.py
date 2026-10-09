@@ -20,7 +20,7 @@ import numconv  # noqa: E402
 import rv32_encoder as rv  # noqa: E402
 
 LLVM_MC = shutil.which("llvm-mc")
-LLVM_ARGS = ["-triple=riscv32", "-mattr=+m,+zba,+zbb,+zbs,+zihintpause", "-show-encoding"]
+LLVM_ARGS = ["-triple=riscv32", "-mattr=+m,+zba,+zbb,+zbs,+zihintpause,+zicsr,+zicntr", "-show-encoding"]
 
 # (assembly, expected word) -- values produced by llvm-mc 18
 GOLDEN = [
@@ -57,6 +57,19 @@ GOLDEN = [
     ("nop", 0x00000013),
     ("ret", 0x00008067),
     ("ble x1, x2, 8", 0x00115463),
+    ("csrrw x1, mstatus, x2", 0x300110F3),
+    ("csrrs a0, 0x341, x0", 0x34102573),
+    ("csrrwi x0, mtvec, 31", 0x305FD073),
+    ("csrr a0, mepc", 0x34102573),
+    ("csrw mtvec, a0", 0x30551073),
+    ("csrsi mie, 7", 0x3043E073),
+    ("rdcycle a0", 0xC0002573),
+    ("rdtimeh a1", 0xC81025F3),
+    ("mret", 0x30200073),
+    ("wfi", 0x10500073),
+    ("sret", 0x10200073),
+    ("sfence.vma", 0x12000073),
+    ("sfence.vma t0, t1", 0x12628073),
 ]
 
 
@@ -101,8 +114,10 @@ INVALID = [
     "beq x1, x2, 3", "beq x1, x2, 4096", "beq x1, x2, -4098", "jal x1, 1048576",
     "jal x1, 1", "lui x1, 0x100000", "lui x1, -1", "lw x1, 2048(x2)", "sw x1, x2",
     "add x1, x2", "add x1, x2, x32", "foo x1, x2, x3", "clz x1, x2, x3", "fence rw",
-    "fence wr, r", "rori x1, x2, 32", "bseti x1, x2, 32", "ecall x1", "csrrw x1, 0x300, x2",
+    "fence wr, r", "rori x1, x2, 32", "bseti x1, x2, 32", "ecall x1", "mret x1",
     "fld f0, 0(x1)", "addw x1, x2, x3", "addi x1, x2, 0x_", "addi x1, x2, 0b__",
+    "csrrw x1, 0x1000, x2", "csrrw x1, -1, x2", "csrrw x1, nosuchcsr, x2", "csrrwi x1, mie, 32",
+    "csrrwi x1, mie, x2", "csrrs x1, mstatus", "sfence.vma x1, x2, x3", "csrr a0",
 ]
 
 # --------------------------------------------------------------------------
@@ -129,7 +144,16 @@ def _fence_set(r):
     return s or "rw"
 
 
-PSEUDOS = ["nop", "mv", "not", "seqz", "snez", "j", "jr", "ret", "bgt", "bgtu", "ble", "bleu"]
+PSEUDOS = ["nop", "mv", "not", "seqz", "snez", "j", "jr", "ret", "bgt", "bgtu", "ble", "bleu",
+           "csrr", "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci",
+           "rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth"]
+
+
+def _csr(r):
+    if r.random() < 0.5:
+        return r.choice(sorted(rv.CSR_NAMES))
+    v = r.randrange(0x1000)
+    return hex(v) if r.random() < 0.5 else str(v)
 
 
 def _random_instances(mn, r, n):
@@ -167,6 +191,21 @@ def _random_instances(mn, r, n):
             s = mn
         elif fmt == "UNARY":
             s = f"{mn} {_reg(r)}, {_reg(r)}"
+        elif fmt == "CSR":
+            s = f"{mn} {_reg(r)}, {_csr(r)}, {_reg(r)}"
+        elif fmt == "CSRI":
+            s = f"{mn} {_reg(r)}, {_csr(r)}, {_imm(r, 0, 31)}"
+        elif fmt == "SFENCE":
+            k = r.randrange(3)
+            s = mn if k == 0 else f"{mn} {_reg(r)}" if k == 1 else f"{mn} {_reg(r)}, {_reg(r)}"
+        elif mn == "csrr":
+            s = f"{mn} {_reg(r)}, {_csr(r)}"
+        elif mn in ("csrw", "csrs", "csrc"):
+            s = f"{mn} {_csr(r)}, {_reg(r)}"
+        elif mn in ("csrwi", "csrsi", "csrci"):
+            s = f"{mn} {_csr(r)}, {_imm(r, 0, 31)}"
+        elif mn.startswith("rd"):
+            s = f"{mn} {_reg(r)}"
         elif mn in ("nop", "ret"):
             s = mn
         elif mn in ("mv", "not", "seqz", "snez"):
@@ -232,8 +271,8 @@ class LlvmCrossCheck(unittest.TestCase):
     def test_invalid_also_rejected_by_llvm(self):
         # Only the ones that are wrong for an RV32IMB assembler in general.
         for bad in INVALID:
-            if bad in ("csrrw x1, 0x300, x2", "fence wr, r"):
-                continue   # llvm-mc accepts these (Zicsr / any set order); we don't
+            if bad in ("fence wr, r", "csrrw x1, -1, x2"):
+                continue   # llvm-mc accepts these (any set order / wraps -1 to 0xFFF); we don't
             with self.subTest(asm=bad):
                 self.assertTrue(llvm_rejects(bad), f"llvm-mc accepted '{bad}'")
 

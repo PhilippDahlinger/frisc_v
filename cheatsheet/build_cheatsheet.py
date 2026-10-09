@@ -213,6 +213,28 @@ GROUPS = [
         ("bset", "rd, rs1, rs2", "rd = rs1 | (1 &lt;&lt; rs2[4:0])  (set bit)", "bset x1, x2, x3"),
         ("bseti", "rd, rs1, shamt", "rd = rs1 | (1 &lt;&lt; shamt)", "bseti x1, x2, 31"),
     ]),
+    ("Zicsr: CSR access, atomic read-modify-write of one 12-bit CSR (csr = number or name, see CSR table)", [
+        ("csrrw", "rd, csr, rs1", "t = CSR; CSR = rs1; rd = t. If rd = x0 the CSR is not read.",
+         "csrrw x1, mstatus, x2"),
+        ("csrrs", "rd, csr, rs1", "t = CSR; CSR = t | rs1 (set bits); rd = t. If rs1 = x0 the CSR is not "
+                                  "written.", "csrrs a0, mstatus, t0"),
+        ("csrrc", "rd, csr, rs1", "t = CSR; CSR = t &amp; ~rs1 (clear bits); rd = t. If rs1 = x0 the CSR is "
+                                  "not written.", "csrrc a0, mie, t1"),
+        ("csrrwi", "rd, csr, uimm", "like csrrw with zext(uimm[4:0]) instead of rs1", "csrrwi a0, mscratch, 5"),
+        ("csrrsi", "rd, csr, uimm", "like csrrs with zext(uimm); uimm = 0 means no write", "csrrsi a0, mstatus, 8"),
+        ("csrrci", "rd, csr, uimm", "like csrrc with zext(uimm); uimm = 0 means no write", "csrrci a0, mstatus, 8"),
+    ]),
+    ("Privileged (riscv-privileged.pdf: encodings Ch. 19 Fig. 125, semantics Sec. 3.1.6.1, 3.3, 12.2)", [
+        ("mret", "", "Return from a machine-mode trap: pc = mepc; privilege = mstatus.MPP; MIE = MPIE; "
+                     "MPIE = 1; MPP = least-privileged supported mode (U). If the new mode ≠ M: MPRV = 0.",
+         "mret"),
+        ("wfi", "", "Wait for interrupt: may stall until an interrupt is pending. Implementing it as a NOP "
+                    "is legal.", "wfi"),
+        ("sret", "", "Return from a supervisor-mode trap: pc = sepc; privilege = sstatus.SPP; SIE = SPIE. "
+                     "Only with S-mode.", "sret"),
+        ("sfence.vma", "rs1, rs2", "Fence for page-table updates: flush cached translations for virtual "
+                                   "address rs1 / address space rs2 (x0 = all). Only with S-mode.", "sfence.vma x0, x0"),
+    ]),
 ]
 
 PSEUDOS = [
@@ -229,6 +251,19 @@ PSEUDOS = [
     ("bgtu rs, rt, offset", "bltu rt, rs, offset", "branch if rs &gt; rt (unsigned)", "bgtu a0, a1, 8"),
     ("ble rs, rt, offset", "bge rt, rs, offset", "branch if rs ≤ rt (signed)", "ble a0, a1, 8"),
     ("bleu rs, rt, offset", "bgeu rt, rs, offset", "branch if rs ≤ rt (unsigned)", "bleu a0, a1, 8"),
+    ("csrr rd, csr", "csrrs rd, csr, x0", "read CSR", "csrr a0, mepc"),
+    ("csrw csr, rs", "csrrw x0, csr, rs", "write CSR", "csrw mtvec, a0"),
+    ("csrs csr, rs", "csrrs x0, csr, rs", "set bits in CSR", "csrs mstatus, t0"),
+    ("csrc csr, rs", "csrrc x0, csr, rs", "clear bits in CSR", "csrc mie, t1"),
+    ("csrwi csr, uimm", "csrrwi x0, csr, uimm", "write CSR (immediate)", "csrwi mscratch, 0"),
+    ("csrsi csr, uimm", "csrrsi x0, csr, uimm", "set bits (immediate)", "csrsi mstatus, 8"),
+    ("csrci csr, uimm", "csrrci x0, csr, uimm", "clear bits (immediate)", "csrci mstatus, 8"),
+    ("rdcycle rd", "csrrs rd, cycle, x0", "read cycle counter, low 32 bits (Sec. 7.1)", "rdcycle a0"),
+    ("rdcycleh rd", "csrrs rd, cycleh, x0", "cycle counter, high 32 bits", "rdcycleh a1"),
+    ("rdtime rd", "csrrs rd, time, x0", "real-time clock, low 32 bits", "rdtime a0"),
+    ("rdtimeh rd", "csrrs rd, timeh, x0", "real-time clock, high 32 bits", "rdtimeh a1"),
+    ("rdinstret rd", "csrrs rd, instret, x0", "instructions retired, low 32 bits", "rdinstret a0"),
+    ("rdinstreth rd", "csrrs rd, instreth, x0", "instructions retired, high 32 bits", "rdinstreth a1"),
 ]
 
 SHORT_FORMS = [
@@ -245,12 +280,14 @@ SHORT_FORMS = [
 
 
 def funct_column(op):
-    if op.fmt in ("R", "SHIFT"):
+    if op.fmt in ("R", "SHIFT", "SFENCE"):
         return format(op.funct7, "07b")
     if op.fmt == "UNARY":
         return " ".join(format(v, f"0{msb - lsb + 1}b") for _, msb, lsb, v in op.fixed)
     if op.fmt == "FIXED":
         w = op.word
+        if op.mnemonic in ("mret", "wfi", "sret"):   # funct7 + rs2 field, as in Figure 125
+            return f"{w >> 25:07b} {(w >> 20) & 31:05b}"
         if op.opcode == rv.SYSTEM:
             return format(w >> 20, "012b")
         return f"fm {w >> 28:04b} pred {(w >> 24) & 15:04b} succ {(w >> 20) & 15:04b}"
@@ -262,7 +299,9 @@ def short_format(op):
         "R": "R", "I": "I", "SHIFT": "I (shamt)", "LOAD": "I", "JALR": "I", "S": "S", "B": "B",
         "U": "U", "J": "J", "FENCE": "I (fence)",
         "UNARY": "R (unary)" if op.opcode == rv.OP else "I (unary)",
-        "FIXED": "I (fence)" if op.opcode == rv.MISC_MEM else "I (system)",
+        "FIXED": "I (fence)" if op.opcode == rv.MISC_MEM else
+                 "R (priv)" if op.mnemonic in ("mret", "wfi", "sret") else "I (system)",
+        "CSR": "I (csr)", "CSRI": "I (csr, uimm)", "SFENCE": "R (sfence)",
     }[op.fmt]
 
 
@@ -385,6 +424,18 @@ VARIANTS = [
     ("I (fence)", [I("fm", 31, 28), I("pred", 27, 24, "imm"), I("succ", 23, 20, "imm"), I("rs1", 19, 15),
                    I("funct3", 14, 12), I("rd", 11, 7), I("opcode", 6, 0)],
      "fence, fence.tso, pause; pred/succ bits = I O R W"),
+    ("I (csr)", [I("csr", 31, 20, "imm"), I("rs1", 19, 15), I("funct3", 14, 12), I("rd", 11, 7),
+                 I("opcode", 6, 0)],
+     "csrrw csrrs csrrc (SYSTEM); csr = 12-bit CSR address"),
+    ("I (csr, uimm)", [I("csr", 31, 20, "imm"), I("uimm[4:0]", 19, 15, "imm"), I("funct3", 14, 12),
+                       I("rd", 11, 7), I("opcode", 6, 0)],
+     "csrrwi csrrsi csrrci (SYSTEM); uimm zero-extended"),
+    ("R (priv)", [I("funct7", 31, 25), I("rs2 (fixed)", 24, 20, "funct"), I("rs1=0", 19, 15, "funct"),
+                  I("funct3", 14, 12), I("rd=0", 11, 7, "funct"), I("opcode", 6, 0)],
+     "mret, sret, wfi (SYSTEM), privileged spec Fig. 125"),
+    ("R (sfence)", [I("funct7", 31, 25), I("rs2", 24, 20), I("rs1", 19, 15), I("funct3", 14, 12),
+                    I("rd=0", 11, 7, "funct"), I("opcode", 6, 0)],
+     "sfence.vma (SYSTEM): rs1 = vaddr, rs2 = ASID"),
 ]
 
 IMMEDIATES = [
@@ -483,9 +534,9 @@ def on_page(canvas, doc):
     canvas.setFont("Sans", 6.5)
     canvas.setFillColor(colors.HexColor("#666"))
     w, h = landscape(A4)
-    canvas.drawString(10 * mm, 6 * mm, "FRISC-V · RV32IMB cheat sheet · source: RISC-V Unprivileged ISA "
-                                        "(riscv-unprivileged.pdf), Ch. 2, 12, 30, 36 · generated by "
-                                        "cheatsheet/build_cheatsheet.py from debug_gui/rv32_encoder.py")
+    canvas.drawString(10 * mm, 6 * mm, "FRISC-V · RV32IMB + Zicsr + privileged cheat sheet · sources: "
+                                        "riscv-unprivileged.pdf (Ch. 2, 6, 7, 12, 30, 36), riscv-privileged.pdf "
+                                        "(Ch. 2, 3, 12, 19) · generated by cheatsheet/build_cheatsheet.py")
     canvas.drawRightString(w - 10 * mm, 6 * mm, f"page {doc.page}")
     canvas.restoreState()
 
@@ -495,13 +546,15 @@ def build():
     doc = SimpleDocTemplate(OUT, pagesize=landscape(A4), leftMargin=10 * mm, rightMargin=10 * mm,
                             topMargin=9 * mm, bottomMargin=11 * mm,
                             title="RV32IMB instruction cheat sheet", author="FRISC-V",
-                            subject="RISC-V RV32I + M + B (Zba, Zbb, Zbs) instructions and encodings")
+                            subject="RISC-V RV32I + M + B (Zba, Zbb, Zbs) + Zicsr + privileged instructions "
+                                    "and encodings")
     width = landscape(A4)[0] - 20 * mm
     story = []
 
     # ---- page 1: formats ------------------------------------------------
     story.append(P("RV32IMB instruction cheat sheet", H1))
-    story.append(P("RV32I base + M (multiply/divide) + B (= Zba + Zbb + Zbs bit manipulation). All instructions "
+    story.append(P("RV32I base + M (multiply/divide) + B (= Zba + Zbb + Zbs bit manipulation) + Zicsr (CSR access) "
+                   "+ the privileged instructions mret, wfi, sret, sfence.vma. All instructions "
                    "are 32 bits. <b>sext</b> = sign-extend, <b>zext</b> = zero-extend, all registers are 32 bits. "
                    "Immediates in examples are decimal unless written 0x…; branch and jump offsets are byte "
                    "offsets relative to the instruction itself. The <b>signed int32</b> column is the "
@@ -517,16 +570,12 @@ def build():
                                 ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     story.append(legend)
 
+    # page 1: base formats + immediates
     story.append(P("Base instruction formats (Sec. 2.2 / 2.3)", H2))
     for label, fields, note in FORMATS:
         story.append(FormatDiagram(label, fields, note, width=width, note_w=215))
-    story.append(P("Format variants used by specific instructions", H2))
-    for label, fields, note in VARIANTS:
-        story.append(FormatDiagram(label, fields, note, width=width, note_w=215))
-
-    story.append(PageBreak())
-    story.append(P("Immediate values produced by each format (Figure 1): bit positions of the 32-bit "
-                   "immediate, labelled with the instruction bits that fill them", H2))
+    story.append(P("Immediate values produced by each format (Figure 1): bits of the 32-bit immediate, "
+                   "labelled with the instruction bits that fill them", H2))
     for label, fields in IMMEDIATES:
         story.append(FormatDiagram(label, fields, width=width, note_w=215))
     story.append(Spacer(1, 2))
@@ -534,7 +583,12 @@ def build():
                    "B −4096…4094 (even) · J −1048576…1048574 (even) · U: imm20 0…0xFFFFF (value = imm20 × 4096) · "
                    "shamt 0…31.", NOTE))
 
-    story.append(P("Major opcodes used (Table 72, inst[1:0] = 11)", H2))
+    # page 2: variants + opcode map
+    story.append(PageBreak())
+    story.append(P("Format variants used by specific instructions", H2))
+    for label, fields, note in VARIANTS:
+        story.append(FormatDiagram(label, fields, note, width=width, note_w=215))
+
     by_opcode = {}
     for op in rv.OPS.values():
         by_opcode.setdefault(op.opcode, []).append(op.mnemonic)
@@ -543,10 +597,13 @@ def build():
         fmts = sorted({short_format(rv.OPS[m]) for m in by_opcode[opc]})
         op_rows.append([rv.OPCODE_NAMES[opc], format(opc, "07b"), f"0x{opc:02X}", str(opc), ", ".join(fmts),
                         " ".join(by_opcode[opc])])
-    story.append(simple_table(["Opcode", "inst[6:0]", "Hex", "Dec", "Formats", "Instructions"], op_rows,
-                              [22, 18, 10, 9, 38, 180], mono_cols=(1, 2, 3, 5), bold_cols=(1,)))
+    story.append(KeepTogether([
+        P("Major opcodes used (Table 72, inst[1:0] = 11)", H2),
+        simple_table(["Opcode", "inst[6:0]", "Hex", "Dec", "Formats", "Instructions"], op_rows,
+                     [22, 18, 10, 9, 38, 180], mono_cols=(1, 2, 3, 5), bold_cols=(1,)),
+    ]))
 
-    story.append(P("Registers (x0 is hard-wired to 0; ABI names accepted by the tools)", H2))
+    # page 3: registers + CSR names
     names = rv.ABI_NAMES
     reg_rows = []
     for r in range(8):
@@ -555,8 +612,27 @@ def build():
             n = block * 8 + r
             row += [f"x{n}", names[n] + (" / fp" if n == 8 else "")]
         reg_rows.append(row)
-    story.append(simple_table(["Reg", "ABI", "Reg", "ABI", "Reg", "ABI", "Reg", "ABI"], reg_rows,
-                              [10, 18] * 4, mono_cols=range(8), bold_cols=(0, 2, 4, 6)))
+    story.append(KeepTogether([
+        P("Registers (x0 is hard-wired to 0; ABI names accepted by the tools)", H2),
+        simple_table(["Reg", "ABI", "Reg", "ABI", "Reg", "ABI", "Reg", "ABI"], reg_rows,
+                     [10, 18] * 4, mono_cols=range(8), bold_cols=(0, 2, 4, 6)),
+    ]))
+
+    csr_list = sorted(rv.CSR_NAMES.items(), key=lambda kv: kv[1])
+    per_col = (len(csr_list) + 3) // 4
+    csr_rows = []
+    for i in range(per_col):
+        row = []
+        for c in range(4):
+            k = c * per_col + i
+            row += [f"0x{csr_list[k][1]:03X}", csr_list[k][0]] if k < len(csr_list) else ["", ""]
+        csr_rows.append(row)
+    story.append(KeepTogether([
+        P("CSR names accepted by the tools (any 12-bit number 0…0xFFF also works)", H2),
+        simple_table(["Addr", "Name"] * 4, csr_rows, [10, 18] * 4, mono_cols=range(8), bold_cols=(1, 3, 5, 7)),
+        P("Addresses from riscv-privileged.pdf Sec. 2.2: Table 4 (unprivileged counters, read-only) and "
+          "Table 7 (machine-level CSRs). The *h variants are the upper 32 bits on RV32.", SMALL),
+    ]))
 
     # ---- instruction tables ------------------------------------------------
     story.append(PageBreak())

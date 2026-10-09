@@ -12,7 +12,8 @@ has a recipe, so get them from the map editor (`/editor`) or with:
 
 A constant combinator (tinted blue) whose GUI is replaced by a single-instruction RISC-V assembler:
 
-* Type one RV32IMB instruction, e.g. `addi x1, x2, 23`.
+* Type one instruction (RV32IMB, the CSR instructions, `mret`, `wfi`, `sret`, `sfence.vma`), e.g.
+  `addi x1, x2, 23` or `csrrw t0, mstatus, t1`.
 * The combinator outputs the machine code on **signal D** as a **signed 32-bit integer**
   (`addi x1, x2, 23` → `D = 24182931`, `beq x1, x2, -4096` → `D = -2145353629`).
 * The GUI shows, live while you type: the signed value, hex, binary split into fields, unsigned value,

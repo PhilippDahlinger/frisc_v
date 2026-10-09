@@ -1,4 +1,4 @@
-"""Single-instruction RV32IMB assembler that also reports every encoded field.
+"""Single-instruction RV32IMB + Zicsr + privileged assembler that reports every encoded field.
 
 Ground truth: "The RISC-V Instruction Set Manual, Volume I: Unprivileged
 Architecture" (riscv-unprivileged.pdf in the repo root):
@@ -11,9 +11,21 @@ Architecture" (riscv-unprivileged.pdf in the repo root):
 * FENCE fm/pred/succ ..................... Sec. 2.7 (+ Table 4)
 * ECALL/EBREAK funct12 ................... Sec. 2.8
 * B = Zba + Zbb + Zbs (RV32 encodings) ... Sec. 30.1 - 30.5, 30.9
+* Zicsr (CSR instructions, uimm) ......... Sec. 6.1 + Chapter 36 "Zicsr" table
+* Counter CSRs cycle/time/instret[h] ..... Sec. 7.1
 * Pseudoinstructions ..................... only those the spec itself defines
                                             (NOP, MV, NOT, SEQZ, SNEZ, J, JR,
-                                            RET, BGT/BGTU/BLE/BLEU)
+                                            RET, BGT/BGTU/BLE/BLEU, CSRR/CSRW/
+                                            CSRS/CSRC/CSRWI/CSRSI/CSRCI,
+                                            RDCYCLE[H]/RDTIME[H]/RDINSTRET[H])
+
+Privileged parts: "The RISC-V Instruction Set Manual, Volume II: Privileged
+Architecture" (riscv-privileged.pdf in the repo root):
+
+* MRET, SRET, WFI, SFENCE.VMA ............ Chapter 19, Figure 125 (also checked
+                                            against llvm-mc in the tests)
+* CSR names and addresses ................ Sec. 2.2, Table 4 (counters) and
+                                            Table 7 (machine-level CSRs)
 
 Branch and jump operands are byte offsets relative to the instruction's own
 address (there are no labels, since only one instruction is assembled).
@@ -79,7 +91,7 @@ OPCODE_NAMES = {
 @dataclass(frozen=True)
 class Op:
     mnemonic: str
-    fmt: str            # R, I, SHIFT, LOAD, S, B, U, J, JALR, FENCE, FIXED, UNARY
+    fmt: str            # R, I, SHIFT, LOAD, S, B, U, J, JALR, FENCE, FIXED, UNARY, CSR, CSRI, SFENCE
     opcode: int
     funct3: int = 0
     funct7: int = 0     # R-type funct7, or imm[11:5] for shift-immediates
@@ -147,6 +159,20 @@ _add(
        ext="Zihintpause"),
     Op("ecall", "FIXED", SYSTEM, word=0b000000000000_00000_000_00000_1110011),
     Op("ebreak", "FIXED", SYSTEM, word=0b000000000001_00000_000_00000_1110011),
+    # ---- Zicsr (Sec. 6.1, Chapter 36): csr | rs1 or uimm | funct3 | rd | SYSTEM ----
+    Op("csrrw", "CSR", SYSTEM, 0b001, ext="Zicsr"),
+    Op("csrrs", "CSR", SYSTEM, 0b010, ext="Zicsr"),
+    Op("csrrc", "CSR", SYSTEM, 0b011, ext="Zicsr"),
+    Op("csrrwi", "CSRI", SYSTEM, 0b101, ext="Zicsr"),
+    Op("csrrsi", "CSRI", SYSTEM, 0b110, ext="Zicsr"),
+    Op("csrrci", "CSRI", SYSTEM, 0b111, ext="Zicsr"),
+    # ---- Privileged (riscv-privileged.pdf, Chapter 19, Figure 125) ----
+    # funct7 | rs2 (fixed) | rs1=0 | funct3=000 | rd=0 | SYSTEM
+    Op("mret", "FIXED", SYSTEM, word=0b001100000010_00000_000_00000_1110011, ext="Privileged (M)"),
+    Op("wfi", "FIXED", SYSTEM, word=0b000100000101_00000_000_00000_1110011, ext="Privileged (M)"),
+    Op("sret", "FIXED", SYSTEM, word=0b000100000010_00000_000_00000_1110011, ext="Privileged (S)"),
+    # funct7=0001001 | rs2 | rs1 | funct3=000 | rd=0 | SYSTEM
+    Op("sfence.vma", "SFENCE", SYSTEM, 0b000, 0b0001001, ext="Privileged (S)"),
     Op("mul", "R", OP, 0b000, 0b0000001, ext="RV32M"),
     Op("mulh", "R", OP, 0b001, 0b0000001, ext="RV32M"),
     Op("mulhsu", "R", OP, 0b010, 0b0000001, ext="RV32M"),
@@ -214,7 +240,23 @@ FORMAT_NAMES = {
     "U": "U-type",
     "J": "J-type",
     "FENCE": "I-type (FENCE)",
+    "CSR": "I-type (CSR, register source)",
+    "CSRI": "I-type (CSR, immediate source)",
+    "SFENCE": "R-type (SFENCE.VMA)",
 }
+
+# CSR names accepted in place of a 12-bit CSR number: riscv-privileged.pdf
+# Sec. 2.2, Table 4 (unprivileged counters) and Table 7 (machine-level CSRs).
+CSR_NAMES = {
+    "cycle": 0xC00, "time": 0xC01, "instret": 0xC02,
+    "cycleh": 0xC80, "timeh": 0xC81, "instreth": 0xC82,
+    "mvendorid": 0xF11, "marchid": 0xF12, "mimpid": 0xF13, "mhartid": 0xF14, "mconfigptr": 0xF15,
+    "mstatus": 0x300, "misa": 0x301, "medeleg": 0x302, "mideleg": 0x303, "mie": 0x304, "mtvec": 0x305,
+    "mcounteren": 0x306, "mstatush": 0x310, "mcountinhibit": 0x320,
+    "mscratch": 0x340, "mepc": 0x341, "mcause": 0x342, "mtval": 0x343, "mip": 0x344,
+    "mcycle": 0xB00, "minstret": 0xB02, "mcycleh": 0xB80, "minstreth": 0xB82,
+}
+CSR_BY_NUMBER = {v: k for k, v in CSR_NAMES.items()}
 
 
 def format_name(op: Op) -> str:
@@ -323,6 +365,23 @@ def parse_reg(text: str) -> int:
 
 
 _MEM_RE = re.compile(r"^(.*?)\(\s*([A-Za-z0-9]+)\s*\)$")
+
+
+def parse_csr(text: str) -> int:
+    s = text.strip().lower()
+    if s in CSR_NAMES:
+        return CSR_NAMES[s]
+    if not _INT_RE.match(s):
+        raise AsmError(f"unknown CSR '{text.strip()}' (use a number 0..0xFFF or a known CSR name)")
+    v = parse_int(s, "CSR number")
+    if not 0 <= v <= 0xFFF:
+        raise AsmError(f"CSR number {v} out of range [0, 4095] (12-bit csr field)")
+    return v
+
+
+def csr_text(csr: int) -> str:
+    name = CSR_BY_NUMBER.get(csr)
+    return name if name else f"0x{csr:03X}"
 
 
 def parse_mem(text: str) -> Tuple[int, int]:
@@ -506,10 +565,43 @@ def fields_unary(op: Op, rd: int, rs1: int) -> List[Field]:
     ]
 
 
+def fields_csr(op: Op, rd: int, csr: int, src: int, imm_src: bool) -> List[Field]:
+    name = CSR_BY_NUMBER.get(csr)
+    src_field = (Field("uimm[4:0]", 19, 15, src, f"{src} (zero-extended)") if imm_src
+                 else _reg_field("rs1", 19, src))
+    return [
+        Field("csr", 31, 20, csr, f"CSR 0x{csr:03X}" + (f" ({name})" if name else "")),
+        src_field,
+        _funct3_field(op),
+        _reg_field("rd", 11, rd),
+        _opcode_field(op.opcode),
+    ]
+
+
+def fields_sfence(op: Op, rs1: int, rs2: int) -> List[Field]:
+    return [
+        Field("funct7", 31, 25, op.funct7, "SFENCE.VMA"),
+        Field("rs2", 24, 20, rs2, reg_label(rs2) + " = address space (ASID), x0 = all"),
+        Field("rs1", 19, 15, rs1, reg_label(rs1) + " = virtual address, x0 = all"),
+        _funct3_field(op),
+        _reg_field("rd", 11, 0),
+        _opcode_field(op.opcode),
+    ]
+
+
 def fields_fixed(op: Op) -> List[Field]:
     w = op.word
     if op.mnemonic in ("fence.tso", "pause"):
         return fields_fence(op, bits(w, 31, 28), bits(w, 27, 24), bits(w, 23, 20))
+    if op.mnemonic in ("mret", "wfi", "sret"):  # privileged spec, Chapter 19 (Figure 125)
+        return [
+            Field("funct7", 31, 25, bits(w, 31, 25), op.mnemonic.upper()),
+            Field("rs2 (fixed)", 24, 20, bits(w, 24, 20), op.mnemonic.upper()),
+            _reg_field("rs1", 19, 0),
+            Field("funct3", 14, 12, bits(w, 14, 12), "PRIV"),
+            _reg_field("rd", 11, 0),
+            _opcode_field(op.opcode),
+        ]
     if op.mnemonic in ("ecall", "ebreak"):  # Sec. 2.8
         return [
             Field("funct12", 31, 20, bits(w, 31, 20), op.mnemonic.upper()),
@@ -562,6 +654,8 @@ def decode_immediate(fmt: str, w: int) -> int:
                      | bits(w, 20, 20) << 11 | bits(w, 30, 21) << 1, 21)
     if fmt == "SHIFT":
         return bits(w, 24, 20)
+    if fmt == "CSRI":
+        return bits(w, 19, 15)
     raise ValueError(fmt)
 
 
@@ -594,6 +688,15 @@ def _expand_pseudo(mn: str, ops: List[str]) -> Optional[Tuple[str, List[str]]]:
         need(3)
         real = {"bgt": "blt", "bgtu": "bltu", "ble": "bge", "bleu": "bgeu"}[mn]
         return real, [ops[1], ops[0], ops[2]]
+    if mn == "csrr":                      # Sec. 6.1
+        need(2); return "csrrs", [ops[0], ops[1], "x0"]
+    if mn in ("csrw", "csrs", "csrc"):
+        need(2); return "csrr" + mn[3], ["x0", ops[0], ops[1]]
+    if mn in ("csrwi", "csrsi", "csrci"):
+        need(2); return "csrr" + mn[3] + "i", ["x0", ops[0], ops[1]]
+    m = re.fullmatch(r"rd(cycle|time|instret)(h?)", mn)   # Sec. 7.1
+    if m:
+        need(1); return "csrrs", [ops[0], m.group(1) + m.group(2), "x0"]
     return None
 
 
@@ -749,6 +852,33 @@ def _encode_op(op: Op, ops: List[str]) -> Encoded:
         fields = fields_unary(op, rd, rs1)
         canonical = f"{mn} x{rd}, x{rs1}"
 
+    elif fmt in ("CSR", "CSRI"):
+        need(3)
+        rd, csr = parse_reg(ops[0]), parse_csr(ops[1])
+        if fmt == "CSR":
+            src = parse_reg(ops[2])
+            src_txt = f"x{src}"
+        else:
+            src = parse_int(ops[2], "uimm")
+            check_range(src, 0, 31, "5-bit unsigned immediate")
+            imm, imm_note = src, "uimm[4:0], zero-extended to 32 bits"
+            src_txt = str(src)
+        fields = fields_csr(op, rd, csr, src, fmt == "CSRI")
+        canonical = f"{mn} x{rd}, {csr_text(csr)}, {src_txt}"
+        if fmt == "CSR" and mn != "csrrw" and src == 0:
+            notes.append("rs1 = x0: the CSR is only read, not written")
+        if fmt == "CSRI" and mn != "csrrwi" and src == 0:
+            notes.append("uimm = 0: the CSR is only read, not written")
+        if mn in ("csrrw", "csrrwi") and rd == 0:
+            notes.append("rd = x0: the CSR is only written, not read")
+
+    elif fmt == "SFENCE":
+        need(0, 1, 2)
+        rs1 = parse_reg(ops[0]) if len(ops) >= 1 else 0
+        rs2 = parse_reg(ops[1]) if len(ops) == 2 else 0
+        fields = fields_sfence(op, rs1, rs2)
+        canonical = f"{mn} x{rs1}, x{rs2}"
+
     else:  # pragma: no cover
         raise AssertionError(fmt)
 
@@ -776,7 +906,10 @@ Zba:      sh1add sh2add sh3add
 Zbb:      andn orn xnor clz ctz cpop max maxu min minu sext.b sext.h zext.h
           rol ror rori orc.b rev8
 Zbs:      bclr bclri bext bexti binv binvi bset bseti
+Zicsr:    csrrw csrrs csrrc csrrwi csrrsi csrrci   (CSR: number or name, e.g. mstatus)
+Priv:     mret wfi (M-mode)   sret sfence.vma (S-mode)
 Pseudo:   nop mv not seqz snez j jr ret bgt bgtu ble bleu
+          csrr csrw csrs csrc csrwi csrsi csrci rdcycle[h] rdtime[h] rdinstret[h]
 
 Registers: x0..x31 or ABI names (zero ra sp gp tp t0-t6 s0-s11 fp a0-a7)
 Loads/stores/jalr: lw x1, -4(x2)     Branches/jal: offset in bytes, e.g. beq x1, x2, -8

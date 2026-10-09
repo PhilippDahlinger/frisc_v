@@ -115,6 +115,18 @@ op("fence.tso", "FIXED", MISC_MEM, {word = b"1000_0011_0011_00000_000_00000_0001
 op("pause", "FIXED", MISC_MEM, {word = b"0000_0001_0000_00000_000_00000_0001111", ext = "Zihintpause"})
 op("ecall", "FIXED", SYSTEM, {word = b"000000000000_00000_000_00000_1110011"})
 op("ebreak", "FIXED", SYSTEM, {word = b"000000000001_00000_000_00000_1110011"})
+-- ---- Zicsr (Sec. 6.1, Chapter 36): csr | rs1 or uimm | funct3 | rd | SYSTEM ----
+op("csrrw", "CSR", SYSTEM, {funct3 = b"001", ext = "Zicsr"})
+op("csrrs", "CSR", SYSTEM, {funct3 = b"010", ext = "Zicsr"})
+op("csrrc", "CSR", SYSTEM, {funct3 = b"011", ext = "Zicsr"})
+op("csrrwi", "CSRI", SYSTEM, {funct3 = b"101", ext = "Zicsr"})
+op("csrrsi", "CSRI", SYSTEM, {funct3 = b"110", ext = "Zicsr"})
+op("csrrci", "CSRI", SYSTEM, {funct3 = b"111", ext = "Zicsr"})
+-- ---- Privileged (riscv-privileged.pdf, Chapter 19, Figure 125) ----
+op("mret", "FIXED", SYSTEM, {word = b"001100000010_00000_000_00000_1110011", ext = "Privileged (M)"})
+op("wfi", "FIXED", SYSTEM, {word = b"000100000101_00000_000_00000_1110011", ext = "Privileged (M)"})
+op("sret", "FIXED", SYSTEM, {word = b"000100000010_00000_000_00000_1110011", ext = "Privileged (S)"})
+op("sfence.vma", "SFENCE", SYSTEM, {funct3 = b"000", funct7 = b"0001001", ext = "Privileged (S)"})
 -- RV32M
 op("mul", "R", OP, {funct3 = b"000", funct7 = b"0000001", ext = "RV32M"})
 op("mulh", "R", OP, {funct3 = b"001", funct7 = b"0000001", ext = "RV32M"})
@@ -183,7 +195,25 @@ local FORMAT_NAMES = {
   U = "U-type",
   J = "J-type",
   FENCE = "I-type (FENCE)",
+  CSR = "I-type (CSR, register source)",
+  CSRI = "I-type (CSR, immediate source)",
+  SFENCE = "R-type (SFENCE.VMA)",
 }
+
+-- CSR names accepted in place of a 12-bit CSR number: riscv-privileged.pdf Sec. 2.2,
+-- Table 4 (unprivileged counters) and Table 7 (machine-level CSRs).
+local CSR_NAMES = {
+  cycle = 0xC00, time = 0xC01, instret = 0xC02,
+  cycleh = 0xC80, timeh = 0xC81, instreth = 0xC82,
+  mvendorid = 0xF11, marchid = 0xF12, mimpid = 0xF13, mhartid = 0xF14, mconfigptr = 0xF15,
+  mstatus = 0x300, misa = 0x301, medeleg = 0x302, mideleg = 0x303, mie = 0x304, mtvec = 0x305,
+  mcounteren = 0x306, mstatush = 0x310, mcountinhibit = 0x320,
+  mscratch = 0x340, mepc = 0x341, mcause = 0x342, mtval = 0x343, mip = 0x344,
+  mcycle = 0xB00, minstret = 0xB02, mcycleh = 0xB80, minstreth = 0xB82,
+}
+local CSR_BY_NUMBER = {}
+for name, num in pairs(CSR_NAMES) do CSR_BY_NUMBER[num] = name end
+M.CSR_NAMES = CSR_NAMES
 
 local function format_name(o)
   if o.fmt == "UNARY" then
@@ -268,6 +298,12 @@ local function parse_int(text, what)
   return v
 end
 
+local function int_syntax_ok(s)
+  local body = s:match("^[+-]?(.*)$")
+  return body:match("^0[xX][%x_]+$") or body:match("^0[bB][01_]+$")
+    or body:match("^0[oO][0-7_]+$") or body:match("^%d[%d_]*$")
+end
+
 local function parse_reg(text)
   local s = trim(text):lower()
   local r = REGISTERS[s]
@@ -275,6 +311,23 @@ local function parse_reg(text)
     asm_error("unknown register '" .. trim(text) .. "' (use x0..x31 or ABI names)")
   end
   return r
+end
+
+local function parse_csr(text)
+  local s = trim(text):lower()
+  if CSR_NAMES[s] then return CSR_NAMES[s] end
+  if not int_syntax_ok(s) then
+    asm_error("unknown CSR '" .. trim(text) .. "' (use a number 0..0xFFF or a known CSR name)")
+  end
+  local v = parse_int(s, "CSR number")
+  if v < 0 or v > 0xFFF then
+    asm_error("CSR number " .. d(v) .. " out of range [0, 4095] (12-bit csr field)")
+  end
+  return v
+end
+
+local function csr_text(csr)
+  return CSR_BY_NUMBER[csr] or ("0x" .. hex_str(csr, 3))
 end
 
 -- 'offset(reg)' or '(reg)'  ->  offset, reg
@@ -482,12 +535,51 @@ local function fields_unary(o, rd, rs1)
   return out
 end
 
+local function fields_csr(o, rd, csr, src, imm_src)
+  local name = CSR_BY_NUMBER[csr]
+  local src_field
+  if imm_src then
+    src_field = field("uimm[4:0]", 19, 15, src, d(src) .. " (zero-extended)")
+  else
+    src_field = reg_field("rs1", 19, src)
+  end
+  return {
+    field("csr", 31, 20, csr, "CSR 0x" .. hex_str(csr, 3) .. (name and (" (" .. name .. ")") or "")),
+    src_field,
+    funct3_field(o),
+    reg_field("rd", 11, rd),
+    opcode_field(o.opcode),
+  }
+end
+
+local function fields_sfence(o, rs1, rs2)
+  return {
+    field("funct7", 31, 25, o.funct7, "SFENCE.VMA"),
+    field("rs2", 24, 20, rs2, reg_label(rs2) .. " = address space (ASID), x0 = all"),
+    field("rs1", 19, 15, rs1, reg_label(rs1) .. " = virtual address, x0 = all"),
+    funct3_field(o),
+    reg_field("rd", 11, 0),
+    opcode_field(o.opcode),
+  }
+end
+
 local function fields_fixed(o)
   local w = o.word
   if o.mnemonic == "fence.tso" or o.mnemonic == "pause" then
     return fields_fence(o, bits(w, 31, 28), bits(w, 27, 24), bits(w, 23, 20))
   end
-  if o.mnemonic == "ecall" or o.mnemonic == "ebreak" then  -- Sec. 2.8
+  local mn = o.mnemonic
+  if mn == "mret" or mn == "wfi" or mn == "sret" then  -- privileged spec, Chapter 19 (Figure 125)
+    return {
+      field("funct7", 31, 25, bits(w, 31, 25), mn:upper()),
+      field("rs2 (fixed)", 24, 20, bits(w, 24, 20), mn:upper()),
+      reg_field("rs1", 19, 0),
+      field("funct3", 14, 12, bits(w, 14, 12), "PRIV"),
+      reg_field("rd", 11, 0),
+      opcode_field(o.opcode),
+    }
+  end
+  if mn == "ecall" or mn == "ebreak" then  -- Sec. 2.8
     return {
       field("funct12", 31, 20, bits(w, 31, 20), o.mnemonic:upper()),
       reg_field("rs1", 19, 0),
@@ -540,6 +632,8 @@ local function decode_immediate(fmt, w)
       + bits(w, 20, 20) * pow2(11) + bits(w, 30, 21) * 2, 21)
   elseif fmt == "SHIFT" then
     return bits(w, 24, 20)
+  elseif fmt == "CSRI" then
+    return bits(w, 19, 15)
   end
   error("no immediate for format " .. fmt)
 end
@@ -574,6 +668,17 @@ local function expand_pseudo(mn, ops)
     need(0); return "jalr", {"x0", "x1", "0"}
   elseif BRANCH_SWAP[mn] then              -- Sec. 2.5.2: swap operands
     need(3); return BRANCH_SWAP[mn], {ops[2], ops[1], ops[3]}
+  elseif mn == "csrr" then                 -- Sec. 6.1
+    need(2); return "csrrs", {ops[1], ops[2], "x0"}
+  elseif mn == "csrw" or mn == "csrs" or mn == "csrc" then
+    need(2); return "csrr" .. mn:sub(4, 4), {"x0", ops[1], ops[2]}
+  elseif mn == "csrwi" or mn == "csrsi" or mn == "csrci" then
+    need(2); return "csrr" .. mn:sub(4, 4) .. "i", {"x0", ops[1], ops[2]}
+  end
+  for _, counter in ipairs({"cycle", "cycleh", "time", "timeh", "instret", "instreth"}) do  -- Sec. 7.1
+    if mn == "rd" .. counter then
+      need(1); return "csrrs", {ops[1], counter, "x0"}
+    end
   end
   return nil
 end
@@ -721,6 +826,39 @@ local function encode_op(o, ops)
     fields = fields_unary(o, rd, rs1)
     canonical = mn .. " x" .. rd .. ", x" .. rs1
 
+  elseif fmt == "CSR" or fmt == "CSRI" then
+    need(3)
+    local rd, csr = parse_reg(ops[1]), parse_csr(ops[2])
+    local src, src_txt
+    if fmt == "CSR" then
+      src = parse_reg(ops[3])
+      src_txt = "x" .. src
+    else
+      src = parse_int(ops[3], "uimm")
+      check_range(src, 0, 31, "5-bit unsigned immediate")
+      imm, imm_note = src, "uimm[4:0], zero-extended to 32 bits"
+      src_txt = d(src)
+    end
+    fields = fields_csr(o, rd, csr, src, fmt == "CSRI")
+    canonical = mn .. " x" .. rd .. ", " .. csr_text(csr) .. ", " .. src_txt
+    if fmt == "CSR" and mn ~= "csrrw" and src == 0 then
+      notes[#notes + 1] = "rs1 = x0: the CSR is only read, not written"
+    end
+    if fmt == "CSRI" and mn ~= "csrrwi" and src == 0 then
+      notes[#notes + 1] = "uimm = 0: the CSR is only read, not written"
+    end
+    if (mn == "csrrw" or mn == "csrrwi") and rd == 0 then
+      notes[#notes + 1] = "rd = x0: the CSR is only written, not read"
+    end
+
+  elseif fmt == "SFENCE" then
+    need(0, 1, 2)
+    local rs1, rs2 = 0, 0
+    if #ops >= 1 then rs1 = parse_reg(ops[1]) end
+    if #ops == 2 then rs2 = parse_reg(ops[2]) end
+    fields = fields_sfence(o, rs1, rs2)
+    canonical = mn .. " x" .. rs1 .. ", x" .. rs2
+
   else
     error("unknown format " .. fmt)
   end
@@ -795,7 +933,10 @@ M.SUPPORTED_HELP = table.concat({
   "Zbb:    andn orn xnor clz ctz cpop max maxu min minu sext.b sext.h zext.h",
   "        rol ror rori orc.b rev8",
   "Zbs:    bclr bclri bext bexti binv binvi bset bseti",
+  "Zicsr:  csrrw csrrs csrrc csrrwi csrrsi csrrci  (CSR: number or name, e.g. mstatus)",
+  "Priv:   mret wfi (M-mode)   sret sfence.vma (S-mode)",
   "Pseudo: nop mv not seqz snez j jr ret bgt bgtu ble bleu",
+  "        csrr csrw csrs csrc csrwi csrsi csrci rdcycle[h] rdtime[h] rdinstret[h]",
   "",
   "Registers: x0..x31 or ABI names (zero ra sp gp tp t0-t6 s0-s11 fp a0-a7)",
   "Loads/stores/jalr: lw x1, -4(x2)",
