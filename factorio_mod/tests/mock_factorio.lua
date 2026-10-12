@@ -1,7 +1,7 @@
--- Minimal, strict mock of the Factorio 2.0 runtime API used by control.lua.
+-- Minimal, strict mock of the Factorio 2.1 runtime API used by control.lua.
 -- It exists to run control.lua outside the game: unknown GUI parameters, style
 -- properties, style names or malformed logistic filters raise errors, so typos
--- and API misuse show up in tests. Allowed names come from the 2.0.77 runtime
+-- and API misuse show up in tests. Allowed names come from the 2.1.21 runtime
 -- API (factorio-types) and core/prototypes/style.lua.
 
 local M = {}
@@ -292,7 +292,7 @@ function M.install()
     "on_entity_settings_pasted", "on_tick"}
   local events = {}
   for i, n in ipairs(event_names) do events[n] = i end
-  _G.defines = {events = events, gui_type = {entity = 5, custom = 4},
+  _G.defines = {events = events, gui_type = {entity = 6, custom = 5},
                 wire_connector_id = {circuit_red = 0, circuit_green = 1}}
   _G.prototypes = {item = {}}
   for _, n in ipairs(M.ITEMS) do _G.prototypes.item[n] = {name = n} end
